@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import { Card } from '../ui/card';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
@@ -8,11 +8,27 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '.
 import { Switch } from '../ui/switch';
 import { fetchPlants, fetchPlantDetails } from '../../lib/perenual';
 import type { Plant, PlantDetails, PlantListResponse } from '../../lib/perenual';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useWindowVirtualizer, elementScroll } from '@tanstack/react-virtual';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import type { Virtualizer, VirtualizerOptions } from '@tanstack/react-virtual';
+import { toast } from 'sonner';
+
+// --- Custom debounce hook ---
+function useDebouncedValue<T>(value: T, delay: number) {
+  const [debounced, setDebounced] = useState(value);
+  React.useEffect(() => {
+    const handler = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debounced;
+}
+
+// --- Smooth scroll function ---
+function easeInOutQuint(t: number) {
+  return t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * --t * t * t * t * t;
+}
 
 const FAVORITES_KEY = 'plant_favorites';
-
 function useFavorites() {
   const [favorites, setFavorites] = useState<number[]>(() => {
     try {
@@ -21,7 +37,7 @@ function useFavorites() {
       return [];
     }
   });
-  useEffect(() => {
+  React.useEffect(() => {
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
   }, [favorites]);
   const toggleFavorite = (id: number) => {
@@ -57,8 +73,9 @@ const HARDINESS_OPTIONS = [
 ];
 
 export default function PlantBrowser() {
-  const [search, setSearch] = useState('');
+  // --- State ---
   const [searchInput, setSearchInput] = useState('');
+  const debouncedSearch = useDebouncedValue(searchInput, 400);
   const [selectedPlant, setSelectedPlant] = useState<PlantDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [showFavorites, setShowFavorites] = useState(false);
@@ -70,18 +87,10 @@ export default function PlantBrowser() {
   const [indoor, setIndoor] = useState(false);
   const [hardiness, setHardiness] = useState('any');
   const { favorites, toggleFavorite } = useFavorites();
-  const parentRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
 
-  // Debounce search and filters
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setSearch(searchInput);
-    }, 400);
-    return () => clearTimeout(handler);
-  }, [searchInput, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
-
-  // Infinite Query for plants
+  // --- Infinite Query ---
   const {
     status,
     data,
@@ -90,11 +99,10 @@ export default function PlantBrowser() {
     isFetchingNextPage,
     fetchNextPage,
     hasNextPage,
-    refetch,
   } = useInfiniteQuery({
     queryKey: [
       'plants',
-      search,
+      debouncedSearch,
       cycle,
       watering,
       sunlight,
@@ -103,18 +111,29 @@ export default function PlantBrowser() {
       indoor,
       hardiness,
     ],
-    queryFn: ({ pageParam = 1 }) =>
-      fetchPlants({
-        page: pageParam,
-        q: search,
-        cycle: cycle === 'any' ? undefined : cycle,
-        watering: watering === 'any' ? undefined : watering,
-        sunlight: sunlight === 'any' ? undefined : sunlight,
-        edible: edible ? true : undefined,
-        poisonous: poisonous ? true : undefined,
-        indoor: indoor ? true : undefined,
-        hardiness: hardiness === 'any' ? undefined : hardiness,
-      }),
+    queryFn: async ({ pageParam = 1 }) => {
+      toast('Fetching plants from API...');
+      try {
+        const res = await fetchPlants({
+          page: pageParam,
+          q: debouncedSearch,
+          cycle: cycle === 'any' ? undefined : cycle,
+          watering: watering === 'any' ? undefined : watering,
+          sunlight: sunlight === 'any' ? undefined : sunlight,
+          edible: edible ? true : undefined,
+          poisonous: poisonous ? true : undefined,
+          indoor: indoor ? true : undefined,
+          hardiness: hardiness === 'any' ? undefined : hardiness,
+        });
+        if (!res.data || res.data.length === 0) {
+          toast.error('No plants found for the current filters.', { description: 'Try adjusting your search or filters.' });
+        }
+        return res;
+      } catch (err: any) {
+        toast.error('API Error', { description: err?.message || 'Failed to fetch plants.' });
+        throw err;
+      }
+    },
     getNextPageParam: (lastPage) => {
       if (lastPage.current_page < lastPage.last_page) {
         return lastPage.current_page + 1;
@@ -124,21 +143,46 @@ export default function PlantBrowser() {
     initialPageParam: 1,
   });
 
-  const allPlants = data ? data.pages.flatMap((d) => (d as PlantListResponse).data) : [];
-  const filteredPlants = showFavorites
-    ? allPlants.filter((p) => favorites.includes(p.id))
-    : allPlants;
+  // --- Data flattening and filtering ---
+  const allPlants = useMemo(
+    () => (data ? data.pages.flatMap((d) => (d as PlantListResponse).data) : []),
+    [data]
+  );
+  const filteredPlants = useMemo(
+    () => (showFavorites ? allPlants.filter((p) => favorites.includes(p.id)) : allPlants),
+    [allPlants, showFavorites, favorites]
+  );
 
-  const rowVirtualizer = useVirtualizer({
+  // --- Window Virtualizer ---
+  const virtualizer = useWindowVirtualizer({
     count: hasNextPage ? filteredPlants.length + 1 : filteredPlants.length,
-    getScrollElement: () => parentRef.current,
     estimateSize: () => 112,
     overscan: 8,
+    scrollMargin: listRef.current?.offsetTop ?? 0,
+    scrollToFn: useCallback((offset: number, options: { adjustments?: number; behavior?: ScrollBehavior }, instance: Virtualizer<Window, Element>) => {
+      const duration = 700;
+      const start = window.scrollY;
+      const startTime = Date.now();
+      const canSmooth = options.behavior === 'smooth';
+      function run() {
+        const now = Date.now();
+        const elapsed = now - startTime;
+        const progress = easeInOutQuint(Math.min(elapsed / duration, 1));
+        const interpolated = start + (offset - start) * progress;
+        elementScroll(interpolated, { ...options, behavior: options.behavior as any }, instance as any);
+        if (elapsed < duration) {
+          requestAnimationFrame(run);
+        } else {
+          elementScroll(offset, { ...options, behavior: options.behavior as any }, instance as any);
+        }
+      }
+      requestAnimationFrame(run);
+    }, []),
   });
 
-  // Infinite scroll trigger
-  useEffect(() => {
-    const [lastItem] = [...rowVirtualizer.getVirtualItems()].reverse();
+  // --- Infinite scroll trigger ---
+  React.useEffect(() => {
+    const [lastItem] = [...virtualizer.getVirtualItems()].reverse();
     if (!lastItem) return;
     if (
       lastItem.index >= filteredPlants.length - 1 &&
@@ -147,20 +191,18 @@ export default function PlantBrowser() {
     ) {
       fetchNextPage();
     }
-  }, [
-    hasNextPage,
-    fetchNextPage,
-    filteredPlants.length,
-    isFetchingNextPage,
-    rowVirtualizer.getVirtualItems(),
-  ]);
+  }, [hasNextPage, fetchNextPage, filteredPlants.length, isFetchingNextPage, virtualizer.getVirtualItems()]);
 
-  // Scroll to top
-  const scrollToTop = () => {
-    parentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  // --- Scroll to top button visibility ---
+  React.useEffect(() => {
+    const onScroll = () => {
+      setShowScrollTop(window.scrollY > 200);
+    };
+    window.addEventListener('scroll', onScroll);
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
-  // Plant details modal
+  // --- Plant details modal ---
   const openDetails = useCallback(async (plant: Plant) => {
     setDetailsLoading(true);
     setSelectedPlant(null);
@@ -172,7 +214,7 @@ export default function PlantBrowser() {
     }
   }, []);
 
-  // Animated fade-in for cards
+  // --- UI ---
   const fadeInClass =
     'transition-opacity duration-500 ease-in opacity-0 will-change-auto animate-fadein';
 
@@ -261,15 +303,15 @@ export default function PlantBrowser() {
           <label htmlFor="indoor" className="text-xs">Indoor</label>
         </div>
       </div>
-      {/* Plant list */}
-      <div
-        ref={parentRef}
-        className="relative h-[70vh] overflow-auto border rounded-lg bg-background"
-        tabIndex={0}
-        aria-label="Plant list"
-        onScroll={e => setShowScrollTop((e.target as HTMLDivElement).scrollTop > 200)}
-      >
-        <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+      {/* Plant list (window virtualizer) */}
+      <div ref={listRef} className="List" style={{ position: 'relative', minHeight: '70vh' }}>
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            width: '100%',
+            position: 'relative',
+          }}
+        >
           {status === 'pending' ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4">
               {Array.from({ length: 8 }).map((_, i) => (
@@ -279,20 +321,21 @@ export default function PlantBrowser() {
           ) : filteredPlants.length === 0 ? (
             <div className="p-8 text-center text-muted-foreground">No plants found.</div>
           ) : (
-            rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            virtualizer.getVirtualItems().map((virtualRow) => {
               const isLoaderRow = virtualRow.index > filteredPlants.length - 1;
               const plant = filteredPlants[virtualRow.index];
               return (
                 <div
-                  key={virtualRow.index}
+                  key={virtualRow.key}
+                  className={fadeInClass + ' opacity-100'}
                   style={{
                     position: 'absolute',
                     top: 0,
                     left: 0,
                     width: '100%',
-                    transform: `translateY(${virtualRow.start}px)`
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start - (virtualizer.options.scrollMargin || 0)}px)`
                   }}
-                  className={fadeInClass + ' opacity-100'}
                 >
                   {isLoaderRow ? (
                     hasNextPage ? 'Loading more...' : 'Nothing more to load'
@@ -338,7 +381,7 @@ export default function PlantBrowser() {
         {showScrollTop && (
           <Button
             className="fixed bottom-8 right-8 z-20 shadow-lg rounded-full bg-white/80 dark:bg-zinc-900/80 backdrop-blur border border-zinc-200 dark:border-zinc-800"
-            onClick={scrollToTop}
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
             aria-label="Scroll to top"
           >
             ⬆️
