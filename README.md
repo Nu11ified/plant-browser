@@ -1,87 +1,49 @@
-# Welcome to React Router!
+# React Plant Browser 🌱
 
-A modern, production-ready template for building full-stack React applications using React Router.
-
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
+A web application built with React for browsing a collection of plants. This project utilizes React Router for seamless navigation and TanStack Virtual (React Virtual) for efficient rendering of potentially large plant lists.
 
 ## Features
 
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
+*   **Browse Plants:** View a list of available plants.
+*   **Efficient List Rendering:** Uses TanStack Virtual to render only the visible items in the list, ensuring high performance even with thousands of plants.
+*   **Detailed View:** Click on a plant to navigate to a dedicated page showing more details (handled by React Router).
+*   **Client-Side Routing:** Smooth navigation between the plant list and detail views without full page reloads, thanks to React Router.
+*   **(Optional: Add other features like Search, Filtering, Sorting, etc. if you implemented them)**
 
-## Getting Started
+## Technologies Used
 
-### Installation
+*   **React:** JavaScript library for building user interfaces.
+*   **React Router (v6):** For declarative client-side routing.
+*   **TanStack Virtual (React Virtual):** For virtualizing large lists and grids, optimizing performance.
+*   **Vite:** For project setup, development server, and bundling.
+*   **Tailwind CSS:** For styling the application.
 
-Install the dependencies:
+## Prerequisites
 
-```bash
-npm install
-```
+Before you begin, ensure you have the following installed:
 
-### Development
+*   Bun
 
-Start the development server with HMR:
+## Installation
 
-```bash
-npm run dev
-```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/Nu11ified/plant-browser.git
+    cd plant-browser
+    ```
 
-Your application will be available at `http://localhost:5173`.
+2.  **Install dependencies:**
+    ```bash
+    bun install
+    ```
 
-## Building for Production
+## Running the Project
 
-Create a production build:
+1.  **Start the development server:**
+    ```bash
+    bun dev
+    ```
 
-```bash
-npm run build
-```
+2.  **Open your browser:**
+    Navigate to `http://localhost:5173` 
 
-## Deployment
-
-### Docker Deployment
-
-To build and run using Docker:
-
-```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
-```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
