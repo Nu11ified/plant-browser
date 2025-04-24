@@ -7,6 +7,13 @@ import {
   ScrollRestoration,
 } from "react-router";
 
+import {
+  NavigationMenu,
+  NavigationMenuList,
+  NavigationMenuItem,
+  NavigationMenuLink,
+} from "./components/ui/navigation-menu";
+
 import type { Route } from "./+types/root";
 import "./app.css";
 
@@ -33,6 +40,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
+        {/* Global Navigation Bar */}
+        <nav className="sticky top-0 z-50 bg-white/80 dark:bg-zinc-900/80 backdrop-blur border-b border-zinc-200 dark:border-zinc-800 shadow-sm">
+          <div className="container mx-auto px-4 flex items-center h-16">
+            <NavigationMenu className="flex-1">
+              <NavigationMenuList>
+                <NavigationMenuItem>
+                  <NavigationMenuLink href="/" className="flex items-center gap-2 font-bold text-lg">
+                    <span className="text-2xl">🌱</span>
+                    <span>Plant Browser</span>
+                  </NavigationMenuLink>
+                </NavigationMenuItem>
+                {/* Future links can go here */}
+              </NavigationMenuList>
+            </NavigationMenu>
+          </div>
+        </nav>
         {children}
         <ScrollRestoration />
         <Scripts />

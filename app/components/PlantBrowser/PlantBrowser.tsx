@@ -1,13 +1,14 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { Card, CardContent } from '../ui/card';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { Card } from '../ui/card';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../ui/dialog';
 import { Skeleton } from '../ui/skeleton';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
+import { Switch } from '../ui/switch';
 import { fetchPlants, fetchPlantDetails } from '../../lib/perenual';
 import type { Plant, PlantDetails } from '../../lib/perenual';
 import { useVirtualizer } from '@tanstack/react-virtual';
-// TODO: If types are missing, run: npm i -D @tanstack/react-virtual
 
 const FAVORITES_KEY = 'plant_favorites';
 
@@ -28,70 +29,144 @@ function useFavorites() {
   return { favorites, toggleFavorite };
 }
 
+const CYCLE_OPTIONS = [
+  { value: 'any', label: 'Any Cycle' },
+  { value: 'perennial', label: 'Perennial' },
+  { value: 'annual', label: 'Annual' },
+  { value: 'biennial', label: 'Biennial' },
+  { value: 'biannual', label: 'Biannual' },
+];
+const WATERING_OPTIONS = [
+  { value: 'any', label: 'Any Watering' },
+  { value: 'frequent', label: 'Frequent' },
+  { value: 'average', label: 'Average' },
+  { value: 'minimum', label: 'Minimum' },
+  { value: 'none', label: 'None' },
+];
+const SUNLIGHT_OPTIONS = [
+  { value: 'any', label: 'Any Sunlight' },
+  { value: 'full_shade', label: 'Full Shade' },
+  { value: 'part_shade', label: 'Part Shade' },
+  { value: 'sun-part_shade', label: 'Sun/Part Shade' },
+  { value: 'full_sun', label: 'Full Sun' },
+];
+const HARDINESS_OPTIONS = [
+  { value: 'any', label: 'Any Zone' },
+  ...Array.from({ length: 13 }, (_, i) => ({ value: String(i + 1), label: `Zone ${i + 1}` })),
+];
+
 export default function PlantBrowser() {
   const [plants, setPlants] = useState<Plant[]>([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [selectedPlant, setSelectedPlant] = useState<PlantDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(false);
+  const [cycle, setCycle] = useState('any');
+  const [watering, setWatering] = useState('any');
+  const [sunlight, setSunlight] = useState('any');
+  const [edible, setEdible] = useState(false);
+  const [poisonous, setPoisonous] = useState(false);
+  const [indoor, setIndoor] = useState(false);
+  const [hardiness, setHardiness] = useState('any');
   const { favorites, toggleFavorite } = useFavorites();
-  const parentRef = React.useRef<HTMLDivElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const [fetching, setFetching] = useState(false); // for overlapping fetches
+  const nextPageRef = useRef(page);
 
-  // Debounce search
+  // Debounce search and filters
   useEffect(() => {
     const handler = setTimeout(() => {
       setPlants([]);
       setPage(1);
       setHasMore(true);
       setSearch(searchInput);
+      nextPageRef.current = 1;
     }, 400);
     return () => clearTimeout(handler);
-  }, [searchInput]);
+  }, [searchInput, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
 
-  // Fetch plants
+  // Preload first two pages for seamless scroll
   useEffect(() => {
     let ignore = false;
     async function load() {
       setLoading(true);
+      setFetching(true);
       try {
-        const res = await fetchPlants({ page, q: search });
+        const [res1, res2] = await Promise.all([
+          fetchPlants({ page: 1, q: search, cycle: cycle === 'any' ? undefined : cycle, watering: watering === 'any' ? undefined : watering, sunlight: sunlight === 'any' ? undefined : sunlight, edible: edible ? true : undefined, poisonous: poisonous ? true : undefined, indoor: indoor ? true : undefined, hardiness: hardiness === 'any' ? undefined : hardiness }),
+          fetchPlants({ page: 2, q: search, cycle: cycle === 'any' ? undefined : cycle, watering: watering === 'any' ? undefined : watering, sunlight: sunlight === 'any' ? undefined : sunlight, edible: edible ? true : undefined, poisonous: poisonous ? true : undefined, indoor: indoor ? true : undefined, hardiness: hardiness === 'any' ? undefined : hardiness })
+        ]);
         if (!ignore) {
-          setPlants(prev => page === 1 ? res.data : [...prev, ...res.data]);
-          setHasMore(page < res.last_page);
+          setPlants([...res1.data, ...res2.data]);
+          setPage(2);
+          nextPageRef.current = 2;
+          setHasMore(2 < res1.last_page);
         }
       } catch {
         // handle error
       } finally {
         setLoading(false);
+        setFetching(false);
       }
     }
     load();
     return () => { ignore = true; };
-  }, [page, search]);
+  }, [search, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
 
-  // Virtualizer
-  const rowVirtualizer = useVirtualizer({
-    count: plants.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 96,
-    overscan: 8,
-  });
-
-  // Infinite scroll
+  // Fetch more plants on scroll (overlapping, preemptive)
   useEffect(() => {
+    if (loading || fetching || !hasMore) return;
+    let ignore = false;
+    async function load() {
+      setFetching(true);
+      try {
+        const res = await fetchPlants({
+          page: nextPageRef.current + 1,
+          q: search,
+          cycle: cycle === 'any' ? undefined : cycle,
+          watering: watering === 'any' ? undefined : watering,
+          sunlight: sunlight === 'any' ? undefined : sunlight,
+          edible: edible ? true : undefined,
+          poisonous: poisonous ? true : undefined,
+          indoor: indoor ? true : undefined,
+          hardiness: hardiness === 'any' ? undefined : hardiness,
+        });
+        if (!ignore && res.data.length > 0) {
+          setPlants(prev => [...prev, ...res.data]);
+          setPage(nextPageRef.current + 1);
+          nextPageRef.current = nextPageRef.current + 1;
+          setHasMore(nextPageRef.current < res.last_page);
+        }
+      } catch {
+        // handle error
+      } finally {
+        setFetching(false);
+      }
+    }
+    // Preload next page when user scrolls past 50%
     const el = parentRef.current;
     if (!el) return;
     const onScroll = () => {
-      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300 && hasMore && !loading) {
-        setPage(p => p + 1);
+      setShowScrollTop(el.scrollTop > 200);
+      const scrollRatio = (el.scrollTop + el.clientHeight) / el.scrollHeight;
+      if (scrollRatio > 0.5 && hasMore && !fetching) {
+        load();
       }
     };
     el.addEventListener('scroll', onScroll);
     return () => el.removeEventListener('scroll', onScroll);
-  }, [hasMore, loading]);
+    // eslint-disable-next-line
+  }, [hasMore, loading, fetching, search, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
+
+  // Scroll to top
+  const scrollToTop = () => {
+    parentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Plant details modal
   const openDetails = useCallback(async (plant: Plant) => {
@@ -105,103 +180,221 @@ export default function PlantBrowser() {
     }
   }, []);
 
+  // Animated fade-in for cards
+  const fadeInClass =
+    'transition-opacity duration-500 ease-in opacity-0 will-change-auto animate-fadein';
+
+  const filteredPlants = showFavorites
+    ? plants.filter(p => favorites.includes(p.id))
+    : plants;
+
+  // Virtualizer for visible rows
+  const rowVirtualizer = useVirtualizer({
+    count: filteredPlants.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 112,
+    overscan: 8,
+  });
+
   return (
     <div className="max-w-3xl mx-auto py-8">
-      <h1 className="text-3xl font-bold mb-6 text-center">🌱 Plant Browser</h1>
-      <div className="flex gap-2 mb-4">
+      {/* Modern header */}
+      <header className="mb-8 flex flex-col items-center gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-4xl">🌱</span>
+          <span className="text-2xl font-bold tracking-tight">Plant Browser</span>
+        </div>
+        <p className="text-muted-foreground text-center max-w-xl">
+          Discover, search, and favorite plants from a massive database. Powered by Perenual API.
+        </p>
+      </header>
+      {/* Sticky glassy search bar */}
+      <div className="sticky top-0 z-10 mb-2 bg-white/80 dark:bg-zinc-900/80 backdrop-blur border-b border-zinc-200 dark:border-zinc-800 shadow-sm rounded-xl flex flex-col sm:flex-row gap-2 p-3">
         <Input
           placeholder="Search plants..."
           value={searchInput}
           onChange={e => setSearchInput(e.target.value)}
           className="flex-1"
+          aria-label="Search plants"
         />
         <Button variant="outline" onClick={() => setSearchInput('')}>Clear</Button>
+        <Button
+          variant={showFavorites ? 'default' : 'outline'}
+          onClick={() => setShowFavorites(f => !f)}
+          aria-pressed={showFavorites}
+        >
+          {showFavorites ? '★ Favorites' : '☆ Favorites'}
+        </Button>
       </div>
+      {/* Filter bar */}
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+        <Select value={cycle} onValueChange={setCycle}>
+          <SelectTrigger className="min-w-[120px]">
+            <SelectValue placeholder="Cycle" />
+          </SelectTrigger>
+          <SelectContent>
+            {CYCLE_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={watering} onValueChange={setWatering}>
+          <SelectTrigger className="min-w-[120px]">
+            <SelectValue placeholder="Watering" />
+          </SelectTrigger>
+          <SelectContent>
+            {WATERING_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={sunlight} onValueChange={setSunlight}>
+          <SelectTrigger className="min-w-[120px]">
+            <SelectValue placeholder="Sunlight" />
+          </SelectTrigger>
+          <SelectContent>
+            {SUNLIGHT_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={hardiness} onValueChange={setHardiness}>
+          <SelectTrigger className="min-w-[120px]">
+            <SelectValue placeholder="Hardiness" />
+          </SelectTrigger>
+          <SelectContent>
+            {HARDINESS_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-1 px-2">
+          <Switch checked={edible} onCheckedChange={setEdible} id="edible" />
+          <label htmlFor="edible" className="text-xs">Edible</label>
+        </div>
+        <div className="flex items-center gap-1 px-2">
+          <Switch checked={poisonous} onCheckedChange={setPoisonous} id="poisonous" />
+          <label htmlFor="poisonous" className="text-xs">Poisonous</label>
+        </div>
+        <div className="flex items-center gap-1 px-2">
+          <Switch checked={indoor} onCheckedChange={setIndoor} id="indoor" />
+          <label htmlFor="indoor" className="text-xs">Indoor</label>
+        </div>
+      </div>
+      {/* Plant list */}
       <div
         ref={parentRef}
         className="relative h-[70vh] overflow-auto border rounded-lg bg-background"
+        tabIndex={0}
+        aria-label="Plant list"
       >
         <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
-          {rowVirtualizer.getVirtualItems().map((virtualRow: ReturnType<typeof rowVirtualizer.getVirtualItems>[number]) => {
-            const plant = plants[virtualRow.index];
-            return (
-              <div
-                key={plant?.id || virtualRow.index}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualRow.start}px)`
-                }}
-              >
-                {plant ? (
+          {loading && plants.length === 0 ? (
+            // Animated skeleton grid for initial load
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-28 rounded-xl animate-pulse" />
+              ))}
+            </div>
+          ) : filteredPlants.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground">No plants found.</div>
+          ) : (
+            rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const plant = filteredPlants[virtualRow.index];
+              return (
+                <div
+                  key={plant.id}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`
+                  }}
+                  className={fadeInClass + ' opacity-100'}
+                >
                   <Card
-                    className="flex items-center gap-4 p-4 m-2 cursor-pointer hover:bg-muted transition"
+                    className="flex items-center gap-4 p-4 m-2 cursor-pointer hover:bg-muted transition rounded-xl shadow-sm"
                     onClick={() => openDetails(plant)}
+                    tabIndex={0}
+                    aria-label={`View details for ${plant.common_name}`}
                   >
-                    <img
-                      src={plant.default_image?.small_url || ''}
-                      alt={plant.common_name}
-                      className="w-16 h-16 object-cover rounded shadow"
-                      loading="lazy"
-                    />
-                    <div className="flex-1">
-                      <div className="font-semibold text-lg">{plant.common_name}</div>
-                      <div className="text-muted-foreground text-sm">{plant.scientific_name?.join(', ')}</div>
+                    <div className="flex-shrink-0 w-16 h-16 flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 rounded shadow">
+                      {plant.default_image?.small_url ? (
+                        <img
+                          src={plant.default_image.small_url}
+                          alt={plant.common_name}
+                          className="w-16 h-16 object-cover rounded"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No Image</span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-lg line-clamp-1">{plant.common_name || 'Unknown Plant'}</div>
+                      <div className="text-muted-foreground text-sm line-clamp-1">{plant.scientific_name?.join(', ')}</div>
                     </div>
                     <Button
                       variant={favorites.includes(plant.id) ? 'default' : 'outline'}
                       size="icon"
                       onClick={e => { e.stopPropagation(); toggleFavorite(plant.id); }}
-                      aria-label="Favorite"
+                      aria-label={favorites.includes(plant.id) ? 'Unfavorite' : 'Favorite'}
                     >
                       {favorites.includes(plant.id) ? '★' : '☆'}
                     </Button>
                   </Card>
-                ) : (
-                  <Skeleton className="h-24 m-2 rounded" />
-                )}
-              </div>
-            );
-          })}
-          {loading && (
-            <div className="p-4">
-              <Skeleton className="h-24 mb-2 rounded" />
-              <Skeleton className="h-24 mb-2 rounded" />
-            </div>
+                </div>
+              );
+            })
           )}
         </div>
+        {/* Floating scroll to top button */}
+        {showScrollTop && (
+          <Button
+            className="fixed bottom-8 right-8 z-20 shadow-lg rounded-full bg-white/80 dark:bg-zinc-900/80 backdrop-blur border border-zinc-200 dark:border-zinc-800"
+            onClick={scrollToTop}
+            aria-label="Scroll to top"
+          >
+            ⬆️
+          </Button>
+        )}
       </div>
+      {/* Plant details modal */}
       <Dialog open={!!selectedPlant || detailsLoading} onOpenChange={() => setSelectedPlant(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl">
           {detailsLoading || !selectedPlant ? (
             <div className="space-y-4">
               <Skeleton className="h-8 w-1/2" />
               <Skeleton className="h-6 w-1/3" />
-              <Skeleton className="h-40 w-full" />
+              <Skeleton className="h-60 w-full rounded-xl" />
               <Skeleton className="h-4 w-2/3" />
             </div>
           ) : (
             <>
-              <DialogTitle>{selectedPlant.common_name}</DialogTitle>
-              <DialogDescription className="mb-2">
+              <DialogTitle className="text-2xl font-bold mb-1">{selectedPlant.common_name}</DialogTitle>
+              <DialogDescription className="mb-2 text-base">
                 {selectedPlant.scientific_name?.join(', ')}
               </DialogDescription>
               <img
                 src={selectedPlant.default_image?.regular_url || ''}
                 alt={selectedPlant.common_name}
-                className="w-full h-40 object-cover rounded mb-4"
+                className="w-full h-60 object-cover rounded-xl mb-4 shadow"
               />
               <div className="text-sm whitespace-pre-line mb-2">{selectedPlant.description}</div>
-              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                {selectedPlant.sunlight?.length && <span>☀️ {selectedPlant.sunlight.join(', ')}</span>}
-                {selectedPlant.watering && <span>💧 {selectedPlant.watering}</span>}
-                {selectedPlant.cycle && <span>🌱 {selectedPlant.cycle}</span>}
-                {selectedPlant.family && <span>🌳 {selectedPlant.family}</span>}
-                {selectedPlant.edible_fruit && <span>🍎 Edible Fruit</span>}
-                {selectedPlant.medicinal && <span>🩺 Medicinal</span>}
-                {selectedPlant.poisonous_to_humans && <span>☠️ Poisonous</span>}
+              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground mb-2">
+                {selectedPlant.sunlight?.length && <span className="px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 rounded">☀️ {selectedPlant.sunlight.join(', ')}</span>}
+                {selectedPlant.watering && <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 rounded">💧 {selectedPlant.watering}</span>}
+                {selectedPlant.cycle && <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 rounded">🌱 {selectedPlant.cycle}</span>}
+                {selectedPlant.family && <span className="px-2 py-1 bg-emerald-100 dark:bg-emerald-900/30 rounded">🌳 {selectedPlant.family}</span>}
+                {selectedPlant.edible_fruit && <span className="px-2 py-1 bg-pink-100 dark:bg-pink-900/30 rounded">🍎 Edible Fruit</span>}
+                {selectedPlant.medicinal && <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded">🩺 Medicinal</span>}
+                {selectedPlant.poisonous_to_humans && <span className="px-2 py-1 bg-red-100 dark:bg-red-900/30 rounded">☠️ Poisonous</span>}
+              </div>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {selectedPlant.other_name?.map((name, i) => (
+                  <span key={i} className="px-2 py-1 bg-zinc-100 dark:bg-zinc-800/50 rounded text-xs">{name}</span>
+                ))}
               </div>
             </>
           )}

@@ -1,7 +1,10 @@
 // Perenual API utility for plant browsing/search
 // Docs: https://perenual.com/docs/api
 
-const API_KEY = 'sk-pO6L680aa668e24189997';
+const API_KEY = import.meta.env.VITE_API_KEY;
+if (!API_KEY) {
+  throw new Error('API_KEY is not set in environment variables.');
+}
 const BASE_URL = 'https://perenual.com/api/v2';
 
 export interface PlantImage {
