@@ -6,6 +6,7 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import {
   NavigationMenu,
@@ -16,6 +17,8 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
+
+const queryClient = new QueryClient();
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -56,7 +59,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </NavigationMenu>
           </div>
         </nav>
-        {children}
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
         <ScrollRestoration />
         <Scripts />
       </body>

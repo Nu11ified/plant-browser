@@ -7,8 +7,9 @@ import { Skeleton } from '../ui/skeleton';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
 import { Switch } from '../ui/switch';
 import { fetchPlants, fetchPlantDetails } from '../../lib/perenual';
-import type { Plant, PlantDetails } from '../../lib/perenual';
+import type { Plant, PlantDetails, PlantListResponse } from '../../lib/perenual';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useInfiniteQuery } from '@tanstack/react-query';
 
 const FAVORITES_KEY = 'plant_favorites';
 
@@ -56,10 +57,6 @@ const HARDINESS_OPTIONS = [
 ];
 
 export default function PlantBrowser() {
-  const [plants, setPlants] = useState<Plant[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [selectedPlant, setSelectedPlant] = useState<PlantDetails | null>(null);
@@ -75,93 +72,88 @@ export default function PlantBrowser() {
   const { favorites, toggleFavorite } = useFavorites();
   const parentRef = useRef<HTMLDivElement>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [fetching, setFetching] = useState(false); // for overlapping fetches
-  const nextPageRef = useRef(page);
 
   // Debounce search and filters
   useEffect(() => {
     const handler = setTimeout(() => {
-      setPlants([]);
-      setPage(1);
-      setHasMore(true);
       setSearch(searchInput);
-      nextPageRef.current = 1;
     }, 400);
     return () => clearTimeout(handler);
   }, [searchInput, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
 
-  // Preload first two pages for seamless scroll
-  useEffect(() => {
-    let ignore = false;
-    async function load() {
-      setLoading(true);
-      setFetching(true);
-      try {
-        const [res1, res2] = await Promise.all([
-          fetchPlants({ page: 1, q: search, cycle: cycle === 'any' ? undefined : cycle, watering: watering === 'any' ? undefined : watering, sunlight: sunlight === 'any' ? undefined : sunlight, edible: edible ? true : undefined, poisonous: poisonous ? true : undefined, indoor: indoor ? true : undefined, hardiness: hardiness === 'any' ? undefined : hardiness }),
-          fetchPlants({ page: 2, q: search, cycle: cycle === 'any' ? undefined : cycle, watering: watering === 'any' ? undefined : watering, sunlight: sunlight === 'any' ? undefined : sunlight, edible: edible ? true : undefined, poisonous: poisonous ? true : undefined, indoor: indoor ? true : undefined, hardiness: hardiness === 'any' ? undefined : hardiness })
-        ]);
-        if (!ignore) {
-          setPlants([...res1.data, ...res2.data]);
-          setPage(2);
-          nextPageRef.current = 2;
-          setHasMore(2 < res1.last_page);
-        }
-      } catch {
-        // handle error
-      } finally {
-        setLoading(false);
-        setFetching(false);
+  // Infinite Query for plants
+  const {
+    status,
+    data,
+    error,
+    isFetching,
+    isFetchingNextPage,
+    fetchNextPage,
+    hasNextPage,
+    refetch,
+  } = useInfiniteQuery({
+    queryKey: [
+      'plants',
+      search,
+      cycle,
+      watering,
+      sunlight,
+      edible,
+      poisonous,
+      indoor,
+      hardiness,
+    ],
+    queryFn: ({ pageParam = 1 }) =>
+      fetchPlants({
+        page: pageParam,
+        q: search,
+        cycle: cycle === 'any' ? undefined : cycle,
+        watering: watering === 'any' ? undefined : watering,
+        sunlight: sunlight === 'any' ? undefined : sunlight,
+        edible: edible ? true : undefined,
+        poisonous: poisonous ? true : undefined,
+        indoor: indoor ? true : undefined,
+        hardiness: hardiness === 'any' ? undefined : hardiness,
+      }),
+    getNextPageParam: (lastPage) => {
+      if (lastPage.current_page < lastPage.last_page) {
+        return lastPage.current_page + 1;
       }
-    }
-    load();
-    return () => { ignore = true; };
-  }, [search, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
+      return undefined;
+    },
+    initialPageParam: 1,
+  });
 
-  // Fetch more plants on scroll (overlapping, preemptive)
+  const allPlants = data ? data.pages.flatMap((d) => (d as PlantListResponse).data) : [];
+  const filteredPlants = showFavorites
+    ? allPlants.filter((p) => favorites.includes(p.id))
+    : allPlants;
+
+  const rowVirtualizer = useVirtualizer({
+    count: hasNextPage ? filteredPlants.length + 1 : filteredPlants.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 112,
+    overscan: 8,
+  });
+
+  // Infinite scroll trigger
   useEffect(() => {
-    if (loading || fetching || !hasMore) return;
-    let ignore = false;
-    async function load() {
-      setFetching(true);
-      try {
-        const res = await fetchPlants({
-          page: nextPageRef.current + 1,
-          q: search,
-          cycle: cycle === 'any' ? undefined : cycle,
-          watering: watering === 'any' ? undefined : watering,
-          sunlight: sunlight === 'any' ? undefined : sunlight,
-          edible: edible ? true : undefined,
-          poisonous: poisonous ? true : undefined,
-          indoor: indoor ? true : undefined,
-          hardiness: hardiness === 'any' ? undefined : hardiness,
-        });
-        if (!ignore && res.data.length > 0) {
-          setPlants(prev => [...prev, ...res.data]);
-          setPage(nextPageRef.current + 1);
-          nextPageRef.current = nextPageRef.current + 1;
-          setHasMore(nextPageRef.current < res.last_page);
-        }
-      } catch {
-        // handle error
-      } finally {
-        setFetching(false);
-      }
+    const [lastItem] = [...rowVirtualizer.getVirtualItems()].reverse();
+    if (!lastItem) return;
+    if (
+      lastItem.index >= filteredPlants.length - 1 &&
+      hasNextPage &&
+      !isFetchingNextPage
+    ) {
+      fetchNextPage();
     }
-    // Preload next page when user scrolls past 50%
-    const el = parentRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      setShowScrollTop(el.scrollTop > 200);
-      const scrollRatio = (el.scrollTop + el.clientHeight) / el.scrollHeight;
-      if (scrollRatio > 0.5 && hasMore && !fetching) {
-        load();
-      }
-    };
-    el.addEventListener('scroll', onScroll);
-    return () => el.removeEventListener('scroll', onScroll);
-    // eslint-disable-next-line
-  }, [hasMore, loading, fetching, search, cycle, watering, sunlight, edible, poisonous, indoor, hardiness]);
+  }, [
+    hasNextPage,
+    fetchNextPage,
+    filteredPlants.length,
+    isFetchingNextPage,
+    rowVirtualizer.getVirtualItems(),
+  ]);
 
   // Scroll to top
   const scrollToTop = () => {
@@ -183,18 +175,6 @@ export default function PlantBrowser() {
   // Animated fade-in for cards
   const fadeInClass =
     'transition-opacity duration-500 ease-in opacity-0 will-change-auto animate-fadein';
-
-  const filteredPlants = showFavorites
-    ? plants.filter(p => favorites.includes(p.id))
-    : plants;
-
-  // Virtualizer for visible rows
-  const rowVirtualizer = useVirtualizer({
-    count: filteredPlants.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 112,
-    overscan: 8,
-  });
 
   return (
     <div className="max-w-3xl mx-auto py-8">
@@ -287,10 +267,10 @@ export default function PlantBrowser() {
         className="relative h-[70vh] overflow-auto border rounded-lg bg-background"
         tabIndex={0}
         aria-label="Plant list"
+        onScroll={e => setShowScrollTop((e.target as HTMLDivElement).scrollTop > 200)}
       >
         <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
-          {loading && plants.length === 0 ? (
-            // Animated skeleton grid for initial load
+          {status === 'pending' ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4">
               {Array.from({ length: 8 }).map((_, i) => (
                 <Skeleton key={i} className="h-28 rounded-xl animate-pulse" />
@@ -300,10 +280,11 @@ export default function PlantBrowser() {
             <div className="p-8 text-center text-muted-foreground">No plants found.</div>
           ) : (
             rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const isLoaderRow = virtualRow.index > filteredPlants.length - 1;
               const plant = filteredPlants[virtualRow.index];
               return (
                 <div
-                  key={plant.id}
+                  key={virtualRow.index}
                   style={{
                     position: 'absolute',
                     top: 0,
@@ -313,37 +294,41 @@ export default function PlantBrowser() {
                   }}
                   className={fadeInClass + ' opacity-100'}
                 >
-                  <Card
-                    className="flex items-center gap-4 p-4 m-2 cursor-pointer hover:bg-muted transition rounded-xl shadow-sm"
-                    onClick={() => openDetails(plant)}
-                    tabIndex={0}
-                    aria-label={`View details for ${plant.common_name}`}
-                  >
-                    <div className="flex-shrink-0 w-16 h-16 flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 rounded shadow">
-                      {plant.default_image?.small_url ? (
-                        <img
-                          src={plant.default_image.small_url}
-                          alt={plant.common_name}
-                          className="w-16 h-16 object-cover rounded"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className="text-xs text-muted-foreground">No Image</span>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-lg line-clamp-1">{plant.common_name || 'Unknown Plant'}</div>
-                      <div className="text-muted-foreground text-sm line-clamp-1">{plant.scientific_name?.join(', ')}</div>
-                    </div>
-                    <Button
-                      variant={favorites.includes(plant.id) ? 'default' : 'outline'}
-                      size="icon"
-                      onClick={e => { e.stopPropagation(); toggleFavorite(plant.id); }}
-                      aria-label={favorites.includes(plant.id) ? 'Unfavorite' : 'Favorite'}
+                  {isLoaderRow ? (
+                    hasNextPage ? 'Loading more...' : 'Nothing more to load'
+                  ) : (
+                    <Card
+                      className="flex items-center gap-4 p-4 m-2 cursor-pointer hover:bg-muted transition rounded-xl shadow-sm"
+                      onClick={() => openDetails(plant)}
+                      tabIndex={0}
+                      aria-label={`View details for ${plant.common_name}`}
                     >
-                      {favorites.includes(plant.id) ? '★' : '☆'}
-                    </Button>
-                  </Card>
+                      <div className="flex-shrink-0 w-16 h-16 flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 rounded shadow">
+                        {plant.default_image?.small_url ? (
+                          <img
+                            src={plant.default_image.small_url}
+                            alt={plant.common_name}
+                            className="w-16 h-16 object-cover rounded"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No Image</span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-lg line-clamp-1">{plant.common_name || 'Unknown Plant'}</div>
+                        <div className="text-muted-foreground text-sm line-clamp-1">{plant.scientific_name?.join(', ')}</div>
+                      </div>
+                      <Button
+                        variant={favorites.includes(plant.id) ? 'default' : 'outline'}
+                        size="icon"
+                        onClick={e => { e.stopPropagation(); toggleFavorite(plant.id); }}
+                        aria-label={favorites.includes(plant.id) ? 'Unfavorite' : 'Favorite'}
+                      >
+                        {favorites.includes(plant.id) ? '★' : '☆'}
+                      </Button>
+                    </Card>
+                  )}
                 </div>
               );
             })
