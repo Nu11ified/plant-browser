@@ -191,16 +191,26 @@ export async function fetchPlants({
   if (hardiness) params.append('hardiness', hardiness);
 
   const url = `${BASE_URL}/species-list?${params.toString()}`;
+  console.log('[fetchPlants] URL:', url);
   const res = await fetch(url);
-  if (!res.ok) throw new Error('Failed to fetch plant list');
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[fetchPlants] API error response:', text);
+    throw new Error('Failed to fetch plant list');
+  }
   return res.json();
 }
 
 // Fetch plant details by ID
 export async function fetchPlantDetails(id: number): Promise<PlantDetails> {
   const url = `${BASE_URL}/species/details/${id}?key=${API_KEY}`;
+  console.log('[fetchPlantDetails] URL:', url);
   const res = await fetch(url);
-  if (!res.ok) throw new Error('Failed to fetch plant details');
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[fetchPlantDetails] API error response:', text);
+    throw new Error('Failed to fetch plant details');
+  }
   return res.json();
 }
 
@@ -221,8 +231,13 @@ export async function fetchDiseaseList({
   if (id !== undefined) params.append('id', String(id));
   if (q) params.append('q', q);
   const url = `https://perenual.com/api/pest-disease-list?${params.toString()}`;
+  console.log('[fetchDiseaseList] URL:', url);
   const res = await fetch(url);
-  if (!res.ok) throw new Error('Failed to fetch disease list');
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[fetchDiseaseList] API error response:', text);
+    throw new Error('Failed to fetch disease list');
+  }
   return res.json();
 }
 
@@ -246,8 +261,13 @@ export async function fetchCareGuideList({
   if (q) params.append('q', q);
   if (type) params.append('type', type);
   const url = `https://perenual.com/api/species-care-guide-list?${params.toString()}`;
+  console.log('[fetchCareGuideList] URL:', url);
   const res = await fetch(url);
-  if (!res.ok) throw new Error('Failed to fetch care guide list');
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[fetchCareGuideList] API error response:', text);
+    throw new Error('Failed to fetch care guide list');
+  }
   return res.json();
 }
 
@@ -262,7 +282,12 @@ export async function fetchHardinessMap({
     species_id: String(species_id),
   });
   const url = `https://perenual.com/api/hardiness-map?${params.toString()}`;
+  console.log('[fetchHardinessMap] URL:', url);
   const res = await fetch(url);
-  if (!res.ok) throw new Error('Failed to fetch hardiness map');
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[fetchHardinessMap] API error response:', text);
+    throw new Error('Failed to fetch hardiness map');
+  }
   return res.json();
 } 
